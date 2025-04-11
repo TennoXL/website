@@ -1,63 +1,127 @@
 import streamlit as st
-import datetime
-import urllib.parse
-import random
+import requests
+import sqlite3
 
-# Sample attractions in Ras Al Khaimah
-attractions = {
-    "Jebel Jais": "Famous for its mountain views and zipline adventure.",
-    "Al Hamra Mall": "Great for budget shopping and quick meals.",
-    "RAK National Museum": "Explore history on a budget.",
-    "Al Marjan Island": "Scenic beaches perfect for relaxing.",
-    "Dhayah Fort": "A historic fort with a panoramic view."
-}
+# Initialize Database
+def init_db():
+    conn = sqlite3.connect("trip_planner.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS places (
+            id INTEGER PRIMARY KEY,
+            type TEXT,
+            name TEXT,
+            rating REAL,
+            price_level TEXT,
+            description TEXT,
+            reviews_count INTEGER,
+            image_url TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
 
-st.title("🌍 Ras Al Khaimah Budget Tour Planner")
+# Fetch Data from Google Places API
+def fetch_places_data(place_type, api_key):
+    url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={place_type}+in+Ras+Al+Khaimah&key={api_key}"
+    response = requests.get(url)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        st.error("Failed to fetch data. Check your API key or connection.")
+        return None
 
-st.sidebar.header("🌐 Trip Settings")
-budget = st.sidebar.number_input("Enter your budget (AED):", min_value=50, step=10)
-trip_date = st.sidebar.date_input("Select trip date:", datetime.date.today())
-start_time = st.sidebar.time_input("Trip start time:", datetime.time(9, 0))
+# Save Places to Database
+def save_place_to_db(place_type, place):
+    conn = sqlite3.connect("trip_planner.db")
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO places (type, name, rating, price_level, description, reviews_count, image_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (place_type, place['name'], place.get('rating', 0), place.get('price_level', 'N/A'),
+          place.get('formatted_address', 'No description available.'), place.get('user_ratings_total', 0),
+          place.get('image_url', None)))
+    conn.commit()
+    conn.close()
 
-mode = st.radio("Choose how to plan your trip:", ["I want to choose attractions", "Surprise Me!"])
+# Display Places
+def display_places(place_type):
+    conn = sqlite3.connect("trip_planner.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM places WHERE type = ?", (place_type,))
+    places = cursor.fetchall()
+    conn.close()
+    for place in places:
+        st.subheader(place[2])  # Name
+        st.write(f"Rating: {place[3]} ⭐")
+        st.write(f"Price Level: {place[4]}")
+        st.write(place[5])  # Description
+        if place[7]:  # Image URL
+            st.image(place[7], width=300)
 
-selected_attractions = []
-reasons = {}
+# Initialize Database
+init_db()
 
-if mode == "I want to choose attractions":
-    selected_attractions = st.multiselect("Select attractions to visit:", list(attractions.keys()))
-    for place in selected_attractions:
-        duration = st.number_input(f"How many minutes at {place}?", min_value=15, max_value=300, step=15, key=place)
-        reasons[place] = attractions[place]
-else:
-    surprise_count = st.slider("How many places should we surprise you with?", min_value=1, max_value=5, value=3)
-    selected_attractions = random.sample(list(attractions.keys()), surprise_count)
-    for place in selected_attractions:
-        duration = random.choice([30, 60, 90, 120])
-        st.markdown(f"**{place}** - {duration} mins  → {attractions[place]}")
-        st.session_state[place] = duration
-        reasons[place] = attractions[place]
+# Streamlit UI
+st.title("Ras Al Khaimah Trip Planner")
 
-if selected_attractions:
-    st.subheader("🕒 Trip Schedule")
-    current_time = datetime.datetime.combine(trip_date, start_time)
-    schedule = []
-    for place in selected_attractions:
-        duration = st.session_state.get(place) if mode == "Surprise Me!" else st.number_input(f"Reconfirm minutes at {place}:", value=60, min_value=15, max_value=300, step=15, key=f"confirm_{place}")
-        arrive = current_time.strftime("%I:%M %p")
-        leave = (current_time + datetime.timedelta(minutes=duration)).strftime("%I:%M %p")
-        schedule.append((place, arrive, leave))
-        current_time += datetime.timedelta(minutes=duration + 15)  # 15 mins buffer for travel
+# Input API Key
+api_key = st.text_input("Google Places API Key", type="password")
 
-    for place, arrive, leave in schedule:
-        st.write(f"**{place}** → Arrive: {arrive} | Leave: {leave}")
+# Buttons for Hotels, Tourism, and Restaurants
+if st.button("Fetch Hotels"):
+    if not api_key:
+        st.error("Please provide a valid Google Places API Key.")
+    else:
+        hotels_data = fetch_places_data("hotels", api_key)
+        if hotels_data and "results" in hotels_data:
+            for result in hotels_data["results"]:
+                # Add image URL if available
+                if "photos" in result:
+                    photo_ref = result["photos"][0]["photo_reference"]
+                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
+                    result["image_url"] = photo_url
+                save_place_to_db("hotel", result)
+            st.success("Hotels fetched and saved to database!")
+        else:
+            st.error("No data found for hotels.")
 
-    st.subheader("🚗 Google Maps Route")
-    base_url = "https://www.google.com/maps/dir/"
-    places_encoded = [urllib.parse.quote_plus(place + ", Ras Al Khaimah") for place in selected_attractions]
-    route_url = base_url + "/".join(places_encoded)
-    st.markdown(f"[Click to view route in Google Maps]({route_url})")
+if st.button("Fetch Tourism"):
+    if not api_key:
+        st.error("Please provide a valid Google Places API Key.")
+    else:
+        tourism_data = fetch_places_data("tourist attractions", api_key)
+        if tourism_data and "results" in tourism_data:
+            for result in tourism_data["results"]:
+                # Add image URL if available
+                if "photos" in result:
+                    photo_ref = result["photos"][0]["photo_reference"]
+                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
+                    result["image_url"] = photo_url
+                save_place_to_db("tourism", result)
+            st.success("Tourist attractions fetched and saved to database!")
+        else:
+            st.error("No data found for tourist attractions.")
 
-    st.subheader("🔍 Why These Places?")
-    for place in selected_attractions:
-        st.write(f"**{place}** → {reasons[place]}")
+if st.button("Fetch Restaurants"):
+    if not api_key:
+        st.error("Please provide a valid Google Places API Key.")
+    else:
+        restaurants_data = fetch_places_data("restaurants", api_key)
+        if restaurants_data and "results" in restaurants_data:
+            for result in restaurants_data["results"]:
+                # Add image URL if available
+                if "photos" in result:
+                    photo_ref = result["photos"][0]["photo_reference"]
+                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
+                    result["image_url"] = photo_url
+                save_place_to_db("restaurant", result)
+            st.success("Restaurants fetched and saved to database!")
+        else:
+            st.error("No data found for restaurants.")
+
+# Display Saved Data
+st.header("Saved Data")
+place_type = st.selectbox("Select Type to View", ["hotel", "tourism", "restaurant"])
+if st.button("Show Places"):
+    display_places(place_type)
