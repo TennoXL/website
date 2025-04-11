@@ -1,127 +1,77 @@
 import streamlit as st
 import requests
-import sqlite3
+import pandas as pd
 
-# Initialize Database
-def init_db():
-    conn = sqlite3.connect("trip_planner.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS places (
-            id INTEGER PRIMARY KEY,
-            type TEXT,
-            name TEXT,
-            rating REAL,
-            price_level TEXT,
-            description TEXT,
-            reviews_count INTEGER,
-            image_url TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+# Define bounding box for Ras Al Khaimah (min_lat, min_lon, max_lat, max_lon)
+RAS_AL_KHAIMAH_BBOX = (25.5919, 55.7155, 25.9046, 56.0726)
 
-# Fetch Data from Google Places API
-def fetch_places_data(place_type, api_key):
-    url = f"https://maps.googleapis.com/maps/api/place/textsearch/json?query={place_type}+in+Ras+Al+Khaimah&key={api_key}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()
-    else:
-        st.error("Failed to fetch data. Check your API key or connection.")
-        return None
-
-# Save Places to Database
-def save_place_to_db(place_type, place):
-    conn = sqlite3.connect("trip_planner.db")
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO places (type, name, rating, price_level, description, reviews_count, image_url)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (place_type, place['name'], place.get('rating', 0), place.get('price_level', 'N/A'),
-          place.get('formatted_address', 'No description available.'), place.get('user_ratings_total', 0),
-          place.get('image_url', None)))
-    conn.commit()
-    conn.close()
-
-# Display Places
-def display_places(place_type):
-    conn = sqlite3.connect("trip_planner.db")
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM places WHERE type = ?", (place_type,))
-    places = cursor.fetchall()
-    conn.close()
-    for place in places:
-        st.subheader(place[2])  # Name
-        st.write(f"Rating: {place[3]} ⭐")
-        st.write(f"Price Level: {place[4]}")
-        st.write(place[5])  # Description
-        if place[7]:  # Image URL
-            st.image(place[7], width=300)
-
-# Initialize Database
-init_db()
+# Function to fetch data from OpenStreetMap using Overpass API
+def fetch_osm_data(category, bbox):
+    """
+    Fetch data from OpenStreetMap using Overpass API.
+    Args:
+        category (str): Category like 'hotel', 'restaurant', or 'attraction'.
+        bbox (tuple): Bounding box for Ras Al Khaimah (min_lat, min_lon, max_lat, max_lon).
+    Returns:
+        DataFrame: Locations data with name, latitude, longitude, and category.
+    """
+    # Define Overpass API query
+    category_mapping = {
+        "hotel": 'node["tourism"="hotel"]',
+        "restaurant": 'node["amenity"="restaurant"]',
+        "attraction": 'node["tourism"="attraction"]',
+    }
+    query = f"""
+    [out:json];
+    {category_mapping[category]}({bbox[0]},{bbox[1]},{bbox[2]},{bbox[3]});
+    out body;
+    """
+    url = "https://overpass-api.de/api/interpreter"
+    response = requests.get(url, params={"data": query})
+    if response.status_code != 200:
+        return pd.DataFrame([])  # Return empty DataFrame if the request fails
+    
+    data = response.json()
+    
+    # Extract relevant details
+    locations = []
+    for element in data["elements"]:
+        name = element["tags"].get("name", "Unknown")
+        lat = element.get("lat")
+        lon = element.get("lon")
+        locations.append({"name": name, "latitude": lat, "longitude": lon, "category": category})
+    
+    return pd.DataFrame(locations)
 
 # Streamlit UI
 st.title("Ras Al Khaimah Trip Planner")
 
-# Input API Key
-api_key = st.text_input("Google Places API Key", type="password")
-
 # Buttons for Hotels, Tourism, and Restaurants
+st.header("Fetch Locations")
+
 if st.button("Fetch Hotels"):
-    if not api_key:
-        st.error("Please provide a valid Google Places API Key.")
+    hotels = fetch_osm_data("hotel", RAS_AL_KHAIMAH_BBOX)
+    if hotels.empty:
+        st.warning("No hotels found.")
     else:
-        hotels_data = fetch_places_data("hotels", api_key)
-        if hotels_data and "results" in hotels_data:
-            for result in hotels_data["results"]:
-                # Add image URL if available
-                if "photos" in result:
-                    photo_ref = result["photos"][0]["photo_reference"]
-                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
-                    result["image_url"] = photo_url
-                save_place_to_db("hotel", result)
-            st.success("Hotels fetched and saved to database!")
-        else:
-            st.error("No data found for hotels.")
+        st.success(f"Found {len(hotels)} hotels!")
+        st.map(hotels)
+        st.write(hotels)
 
 if st.button("Fetch Tourism"):
-    if not api_key:
-        st.error("Please provide a valid Google Places API Key.")
+    attractions = fetch_osm_data("attraction", RAS_AL_KHAIMAH_BBOX)
+    if attractions.empty:
+        st.warning("No attractions found.")
     else:
-        tourism_data = fetch_places_data("tourist attractions", api_key)
-        if tourism_data and "results" in tourism_data:
-            for result in tourism_data["results"]:
-                # Add image URL if available
-                if "photos" in result:
-                    photo_ref = result["photos"][0]["photo_reference"]
-                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
-                    result["image_url"] = photo_url
-                save_place_to_db("tourism", result)
-            st.success("Tourist attractions fetched and saved to database!")
-        else:
-            st.error("No data found for tourist attractions.")
+        st.success(f"Found {len(attractions)} attractions!")
+        st.map(attractions)
+        st.write(attractions)
 
 if st.button("Fetch Restaurants"):
-    if not api_key:
-        st.error("Please provide a valid Google Places API Key.")
+    restaurants = fetch_osm_data("restaurant", RAS_AL_KHAIMAH_BBOX)
+    if restaurants.empty:
+        st.warning("No restaurants found.")
     else:
-        restaurants_data = fetch_places_data("restaurants", api_key)
-        if restaurants_data and "results" in restaurants_data:
-            for result in restaurants_data["results"]:
-                # Add image URL if available
-                if "photos" in result:
-                    photo_ref = result["photos"][0]["photo_reference"]
-                    photo_url = f"https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference={photo_ref}&key={api_key}"
-                    result["image_url"] = photo_url
-                save_place_to_db("restaurant", result)
-            st.success("Restaurants fetched and saved to database!")
-        else:
-            st.error("No data found for restaurants.")
-
-# Display Saved Data
-st.header("Saved Data")
-place_type = st.selectbox("Select Type to View", ["hotel", "tourism", "restaurant"])
-if st.button("Show Places"):
-    display_places(place_type)
+        st.success(f"Found {len(restaurants)} restaurants!")
+        st.map(restaurants)
+        st.write(restaurants)
