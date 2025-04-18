@@ -5,7 +5,7 @@ import random
 import math
 
 # --- Logo ---
-st.image("logo.png", width=300)  # Replace with your own logo if desired
+st.image("WhatsApp Image 2025-04-17 at 16.35.32_3984a2da.jpg", width=300)  # Replace with your own logo if desired
 
 st.title("Khaimah-Settled")
 
